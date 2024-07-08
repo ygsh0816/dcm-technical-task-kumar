@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from django.conf import settings
 from django.test import TestCase
@@ -53,3 +53,78 @@ class TestTasks(TestCase):
         self.assertTrue(wait.called)
         wait.assert_called_with(timeout=settings.TEST_RUN_REQUEST_TIMEOUT_SECONDS)
         self.assertEqual(TestRunRequest.StatusChoices.SUCCESS.name, self.test_run_req.status)
+
+
+class TestEnvironmentLocking(TestCase):
+
+    def setUp(self):
+        self.env = TestEnvironment.objects.create(name='test_env')
+        self.test_run_request = TestRunRequest.objects.create(env=self.env)
+
+    @patch('api.tasks.subprocess.Popen')
+    def test_environment_locking(self, mock_popen):
+        mock_process = MagicMock()
+        mock_process.wait.return_value = 0
+        mock_process.stdout.read.return_value = 'Test output'
+        mock_popen.return_value = mock_process
+
+        with patch('api.models.TestEnvironment.lock') as mock_lock, \
+                patch('api.models.TestEnvironment.unlock') as mock_unlock, \
+                patch('api.models.TestEnvironment.is_busy', return_value=False), \
+                patch('api.models.TestRunRequest.save_logs') as mock_save_logs:
+            execute_test_run_request(self.test_run_request.id)
+
+            # Ensure the environment was locked and then unlocked
+            mock_lock.assert_called_once()
+            mock_unlock.assert_called_once()
+
+            # Ensure logs were saved
+            mock_save_logs.assert_called_with(logs='Test output')
+
+    @patch('api.tasks.handle_task_retry')
+    def test_environment_busy_retries(self, mock_handle_task_retry):
+        with patch('api.models.TestEnvironment.is_busy', return_value=True):
+            execute_test_run_request(self.test_run_request.id)
+
+            # Ensure that the retry handler was called
+            mock_handle_task_retry.assert_called_once_with(self.test_run_request, 0)
+
+    @patch('api.tasks.subprocess.Popen')
+    def test_environment_unlocking_after_command(self, mock_popen):
+        mock_process = MagicMock()
+        mock_process.wait.return_value = 0
+        mock_process.stdout.read.return_value = 'Test output'
+        mock_popen.return_value = mock_process
+
+        with patch('api.models.TestEnvironment.lock') as mock_lock, \
+                patch('api.models.TestEnvironment.unlock') as mock_unlock, \
+                patch('api.models.TestEnvironment.is_busy', return_value=False), \
+                patch('api.models.TestRunRequest.save_logs') as mock_save_logs:
+            execute_test_run_request(self.test_run_request.id)
+
+            # Ensure the environment was locked and then unlocked
+            mock_lock.assert_called_once()
+            mock_unlock.assert_called_once()
+
+            # Ensure logs were saved
+            mock_save_logs.assert_called_with(logs='Test output')
+
+    @patch('api.tasks.subprocess.Popen')
+    def test_environment_unlocked_on_failure(self, mock_popen):
+        mock_process = MagicMock()
+        mock_process.wait.return_value = 1  # Simulate a command failure
+        mock_process.stdout.read.return_value = 'Test output'
+        mock_popen.return_value = mock_process
+
+        with patch('api.models.TestEnvironment.lock') as mock_lock, \
+                patch('api.models.TestEnvironment.unlock') as mock_unlock, \
+                patch('api.models.TestEnvironment.is_busy', return_value=False), \
+                patch('api.models.TestRunRequest.save_logs') as mock_save_logs:
+            execute_test_run_request(self.test_run_request.id)
+
+            # Ensure the environment was locked and then unlocked
+            mock_lock.assert_called_once()
+            mock_unlock.assert_called_once()
+
+            # Ensure logs were saved
+            mock_save_logs.assert_called_with(logs='Test output')

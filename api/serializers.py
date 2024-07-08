@@ -53,3 +53,7 @@ class TestEnvironmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = TestEnvironment
         fields = ('id', 'name')
+
+
+class FileUploadSerializer(serializers.Serializer):
+    file = serializers.FileField()

@@ -3,6 +3,7 @@ import subprocess
 
 from celery import shared_task
 from django.conf import settings
+from django.db import transaction
 
 from api.models import TestRunRequest, TestEnvironment
 
@@ -30,12 +31,12 @@ def handle_task_retry(instance: TestRunRequest, retry: int) -> None:
 def execute_test_run_request(instance_id: int, retry: int = 0) -> None:
     instance = TestRunRequest.objects.get(id=instance_id)
 
-    if instance.env.is_busy():
-        handle_task_retry(instance, retry)
-        return
-
-    env = TestEnvironment.objects.get(name=instance.env.name)
-    env.lock()
+    with transaction.atomic():
+        env = TestEnvironment.objects.select_for_update().get(name=instance.env.name)
+        if env.is_busy():
+            handle_task_retry(instance, retry)
+            return
+        env.lock()
 
     cmd = instance.get_command()
     logger.info(f'Running tests(ID:{instance_id}), CMD({" ".join(cmd)}) on env {instance.env.name}')
@@ -45,7 +46,9 @@ def execute_test_run_request(instance_id: int, retry: int = 0) -> None:
     run = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return_code = run.wait(timeout=settings.TEST_RUN_REQUEST_TIMEOUT_SECONDS)
 
-    env.unlock()
+    with transaction.atomic():
+        env = TestEnvironment.objects.select_for_update().get(name=instance.env.name)
+        env.unlock()
     instance.save_logs(logs=run.stdout.read())
     if return_code == 0:
         instance.mark_as_success()

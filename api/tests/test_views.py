@@ -1,5 +1,6 @@
+import time
 from unittest.mock import patch
-
+import os
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
@@ -74,7 +75,8 @@ class TestTestRunRequestAPIView(TestCase):
 
     @patch('api.views.execute_test_run_request.delay')
     def test_post_valid_one_path(self, task):
-        response = self.client.post(self.url, data={'env': self.env.id, 'path': self.path1.id, 'requested_by': 'iron man'})
+        response = self.client.post(self.url,
+                                    data={'env': self.env.id, 'path': self.path1.id, 'requested_by': 'iron man'})
         self.assertEqual(status.HTTP_201_CREATED, response.status_code)
         response_data = response.json()
         self.__assert_valid_response(response_data, [self.path1.id])
@@ -112,10 +114,10 @@ class TestRunRequestItemAPIView(TestCase):
         self.path2 = TestFilePath.objects.create(path='path2')
         self.test_run_req.path.add(self.path1)
         self.test_run_req.path.add(self.path2)
-        self.url = reverse('test_run_req_item', args=(self.test_run_req.id, ))
+        self.url = reverse('test_run_req_item', args=(self.test_run_req.id,))
 
     def test_get_invalid_pk(self):
-        self.url = reverse('test_run_req_item', args=(8897, ))
+        self.url = reverse('test_run_req_item', args=(8897,))
         response = self.client.get(self.url)
         self.assertEqual(status.HTTP_404_NOT_FOUND, response.status_code)
 
@@ -152,3 +154,34 @@ class TestAssetsAPIView(TestCase):
         response = self.client.get(self.url)
         self.assertEqual(status.HTTP_200_OK, response.status_code)
         self.assertEqual({'k': 'v'}, response.json())
+
+
+class APITestUploadFile(TestCase):
+    def setUp(self):
+        self.env = TestEnvironment.objects.create(name='my_env')
+        self.test_file_path = os.getcwd() + "/sample-tests/test_error.py"
+
+    def test_upload_test(self):
+        url = reverse('upload_test')
+        with open(self.test_file_path, 'rb') as file:
+            response = self.client.post(url, {'file': file}, format='multipart')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(os.path.exists(self.test_file_path))
+
+    @patch('api.views.execute_test_run_request.delay')
+    def test_create_test_run(self, task):
+        time.sleep(5)
+        url = reverse('upload_test')
+        with open(self.test_file_path, 'rb') as file:
+            self.client.post(url, {'file': file}, format='multipart')
+
+        file_path = TestFilePath.objects.create(path=self.test_file_path)
+        url = reverse('test_run_req')
+        data = {'env': self.env.id, 'path': file_path.id, 'requested_by': 'iron man'}
+        response = self.client.post(url, data)
+
+        self.assertEqual(status.HTTP_201_CREATED, response.status_code)
+        response_data = response.json()
+
+        self.assertTrue(task.called)
+        task.assert_called_with(response_data['id'])

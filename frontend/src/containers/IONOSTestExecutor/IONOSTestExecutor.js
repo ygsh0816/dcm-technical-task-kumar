@@ -80,7 +80,7 @@ class IONOSTestExecutor extends Component {
     const formData = new FormData();
     formData.append('upload_dir', this.state.uploadDir)
     formData.append('test_file', this.state.testFile)
-    axios.post('test-file', formData, {
+    axios.post('test-file/', formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
